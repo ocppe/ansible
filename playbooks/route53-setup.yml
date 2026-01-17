@@ -1,0 +1,89 @@
+---
+- name: Setup Route53 subdomain for OpenShift Platform Engineering demo
+  hosts: localhost
+  gather_facts: false
+
+  vars_files:
+    - ../group_vars/all.yml
+
+  vars:
+    sandbox_id: "{{ lookup('env', 'SANDBOX_ID') }}"
+    base_domain: "sandbox{{ sandbox_id }}.opentlc.com"
+    subdomain: "ocp"
+    full_subdomain: "{{ subdomain }}.{{ base_domain }}"
+
+  pre_tasks:
+    - name: Validate SANDBOX_ID environment variable is set
+      ansible.builtin.assert:
+        that:
+          - sandbox_id | length > 0
+        fail_msg: "SANDBOX_ID environment variable must be set. Use: export SANDBOX_ID=XXXX"
+        success_msg: "Setting up Route53 for {{ full_subdomain }}"
+
+  tasks:
+    - name: Get the base hosted zone information
+      amazon.aws.route53_info:
+        query: hosted_zone
+      register: hosted_zones
+
+    - name: Find the base domain hosted zone
+      ansible.builtin.set_fact:
+        base_hosted_zone: "{{ hosted_zones.hosted_zones | selectattr('name', 'equalto', base_domain + '.') | first }}"
+
+    - name: Display base hosted zone info
+      ansible.builtin.debug:
+        msg: "Found base hosted zone: {{ base_hosted_zone.name }} (ID: {{ base_hosted_zone.id }})"
+
+    - name: Create subdomain hosted zone
+      amazon.aws.route53_zone:
+        zone: "{{ full_subdomain }}"
+        comment: "OpenShift Platform Engineering demo subdomain"
+        state: present
+      register: subdomain_zone
+
+    - name: Display subdomain hosted zone info
+      ansible.builtin.debug:
+        msg: "Created/found subdomain hosted zone: {{ full_subdomain }} (ID: {{ subdomain_zone.zone_id }})"
+
+    - name: Get NS records for the subdomain zone
+      amazon.aws.route53_info:
+        query: record_sets
+        hosted_zone_id: "{{ subdomain_zone.zone_id }}"
+        type: NS
+        start_record_name: "{{ full_subdomain }}"
+      register: subdomain_ns_records
+
+    - name: Extract NS record values
+      ansible.builtin.set_fact:
+        ns_records: "{{ subdomain_ns_records.resource_record_sets | selectattr('type', 'equalto', 'NS') | map(attribute='resource_records') | first | map(attribute='value') | list }}"
+
+    - name: Display NS records
+      ansible.builtin.debug:
+        msg: "NS records for {{ full_subdomain }}: {{ ns_records }}"
+
+    - name: Create NS delegation record in parent zone
+      amazon.aws.route53:
+        state: present
+        zone: "{{ base_domain }}"
+        record: "{{ full_subdomain }}"
+        type: NS
+        ttl: 300
+        value: "{{ ns_records }}"
+        overwrite: true
+      register: delegation_record
+
+    - name: Display delegation result
+      ansible.builtin.debug:
+        msg: "NS delegation record created/updated in {{ base_domain }} for {{ full_subdomain }}"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "Route53 Setup Complete"
+          - "============================================"
+          - "Base Domain: {{ base_domain }}"
+          - "Subdomain Zone: {{ full_subdomain }}"
+          - "Subdomain Zone ID: {{ subdomain_zone.zone_id }}"
+          - "NS Records: {{ ns_records }}"
+          - "============================================"

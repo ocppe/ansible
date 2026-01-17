@@ -1,0 +1,127 @@
+---
+- name: Install OpenShift cluster on AWS
+  hosts: localhost
+  gather_facts: true
+
+  vars_files:
+    - ../group_vars/all.yml
+
+  vars:
+    sandbox_id: "{{ lookup('env', 'SANDBOX_ID') }}"
+    install_dir: "{{ playbook_dir }}/../.clusters/{{ cluster_name }}"
+
+  pre_tasks:
+    - name: Validate SANDBOX_ID environment variable is set
+      ansible.builtin.assert:
+        that:
+          - sandbox_id | length > 0
+        fail_msg: "SANDBOX_ID environment variable must be set. Use: export SANDBOX_ID=XXXX"
+
+    - name: Validate cluster_name is provided
+      ansible.builtin.assert:
+        that:
+          - cluster_name is defined
+          - cluster_name | length > 0
+        fail_msg: "cluster_name must be provided. Use: -e cluster_name=<hub|dev|test|prod>"
+
+    - name: Validate cluster_name is valid
+      ansible.builtin.assert:
+        that:
+          - cluster_name in clusters
+        fail_msg: "cluster_name must be one of: {{ clusters.keys() | list | join(', ') }}"
+
+    - name: Validate pull_secret is provided
+      ansible.builtin.assert:
+        that:
+          - pull_secret is defined
+          - pull_secret | length > 0
+        fail_msg: "pull_secret must be provided. Use: -e \"pull_secret='$(cat ~/.pull-secret)'\""
+
+    - name: Validate ssh_public_key is provided
+      ansible.builtin.assert:
+        that:
+          - ssh_public_key is defined
+          - ssh_public_key | length > 0
+        fail_msg: "ssh_public_key must be provided. Use: -e \"ssh_public_key='$(cat ~/.ssh/ocp_ed25519.pub)'\""
+
+    - name: Set cluster configuration
+      ansible.builtin.set_fact:
+        cluster: "{{ clusters[cluster_name] }}"
+
+    - name: Display cluster configuration
+      ansible.builtin.debug:
+        msg:
+          - "Cluster: {{ cluster_name }}"
+          - "Base Domain: {{ base_domain }}"
+          - "Full Domain: {{ cluster_name }}.{{ base_domain }}"
+          - "Sizing: {{ cluster.sizing }}"
+          - "Control Plane: {{ cluster.control_plane.count }}x {{ cluster.control_plane.instance_type }}"
+          - "Workers: {{ cluster.worker.count }}x {{ cluster.worker.instance_type }}"
+
+  tasks:
+    - name: Create cluster install directory
+      ansible.builtin.file:
+        path: "{{ install_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Check if cluster is already installed
+      ansible.builtin.stat:
+        path: "{{ install_dir }}/metadata.json"
+      register: cluster_metadata
+
+    - name: Generate install-config.yaml
+      when: not cluster_metadata.stat.exists
+      ansible.builtin.template:
+        src: "../templates/install-config.yaml.j2"
+        dest: "{{ install_dir }}/install-config.yaml"
+        mode: '0600'
+
+    - name: Backup install-config.yaml
+      when: not cluster_metadata.stat.exists
+      ansible.builtin.copy:
+        src: "{{ install_dir }}/install-config.yaml"
+        dest: "{{ install_dir }}/install-config.yaml.backup"
+        mode: '0600'
+
+    - name: Display log monitoring instructions
+      when: not cluster_metadata.stat.exists
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "Starting OpenShift installation..."
+          - "Monitor progress in another terminal with:"
+          - "  tail -f {{ install_dir }}/.openshift_install.log"
+          - "============================================"
+
+    - name: Run OpenShift installer
+      when: not cluster_metadata.stat.exists
+      ansible.builtin.command:
+        cmd: "openshift-install create cluster --dir={{ install_dir }} --log-level=info"
+      register: install_result
+      changed_when: true
+
+    - name: Get cluster credentials
+      ansible.builtin.slurp:
+        src: "{{ install_dir }}/auth/kubeadmin-password"
+      register: kubeadmin_password
+
+    - name: Display cluster access information
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "OpenShift Cluster Installation Complete"
+          - "============================================"
+          - "Cluster: {{ cluster_name }}"
+          - "Console: https://console-openshift-console.apps.{{ cluster_name }}.{{ base_domain }}"
+          - "API: https://api.{{ cluster_name }}.{{ base_domain }}:6443"
+          - "Username: kubeadmin"
+          - "Password: {{ kubeadmin_password.content | b64decode }}"
+          - ""
+          - "Kubeconfig: {{ install_dir }}/auth/kubeconfig"
+          - "============================================"
+          - ""
+          - "To use this cluster:"
+          - "export KUBECONFIG={{ install_dir }}/auth/kubeconfig"
+          - "oc whoami"
+          - "============================================"

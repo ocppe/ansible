@@ -1,0 +1,78 @@
+---
+# Sandbox ID from environment variable
+sandbox_id: "{{ lookup('env', 'SANDBOX_ID') }}"
+
+# Base domain configuration
+base_domain: "ocp.sandbox{{ sandbox_id }}.opentlc.com"
+
+# AWS Configuration
+aws_region: us-east-2
+
+# OpenShift version
+openshift_version: "4.20"
+
+# Cluster configurations
+clusters:
+  hub:
+    name: hub
+    # Cluster sizing: 'sno' for single-node, 'ha' for high-availability
+    sizing: sno
+    control_plane:
+      count: 1
+      instance_type: m6i.4xlarge
+    worker:
+      count: 0
+      instance_type: m6i.2xlarge
+    network:
+      cluster_cidr: "10.128.0.0/14"
+      service_cidr: "172.30.0.0/16"
+      host_prefix: 23
+
+  dev:
+    name: dev
+    sizing: sno
+    control_plane:
+      count: 1
+      instance_type: m6i.2xlarge
+    worker:
+      count: 0
+      instance_type: m6i.2xlarge
+    network:
+      cluster_cidr: "10.128.0.0/14"
+      service_cidr: "172.30.0.0/16"
+      host_prefix: 23
+
+  test:
+    name: test
+    sizing: sno
+    control_plane:
+      count: 1
+      instance_type: m6i.2xlarge
+    worker:
+      count: 0
+      instance_type: m6i.2xlarge
+    network:
+      cluster_cidr: "10.128.0.0/14"
+      service_cidr: "172.30.0.0/16"
+      host_prefix: 23
+
+  prod:
+    name: prod
+    sizing: sno
+    control_plane:
+      count: 1
+      instance_type: m6i.2xlarge
+    worker:
+      count: 0
+      instance_type: m6i.2xlarge
+    network:
+      cluster_cidr: "10.128.0.0/14"
+      service_cidr: "172.30.0.0/16"
+      host_prefix: 23
+
+# HA configuration presets (for easy switching)
+ha_presets:
+  control_plane:
+    count: 3
+  worker:
+    count: 3
