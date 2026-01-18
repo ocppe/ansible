@@ -1,0 +1,177 @@
+---
+# Playbook: github-webhooks-setup.yml
+# Configures GitHub webhooks for CI pipelines using gh CLI
+#
+# Prerequisites:
+#   - gh CLI installed and authenticated (gh auth login)
+#   - OpenShift cluster accessible (for getting webhook URL)
+#   - AWS secrets already created (for webhook secret)
+#
+# Usage:
+#   ansible-playbook playbooks/github-webhooks-setup.yml \
+#     -e github_org=ocppe \
+#     -e "repos=['customer-api','product-api','order-api']"
+
+- name: Configure GitHub Webhooks for CI Pipelines
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    github_org: "ocppe"
+    repos:
+      - customer-api
+      - product-api
+      - order-api
+    webhook_events:
+      - push
+      - pull_request
+    ci_pipelines_namespace: "ci-pipelines"
+    secrets_prefix: "ocppe"
+
+  tasks:
+    # ==================== Verify Prerequisites ====================
+    - name: Check gh CLI is installed
+      ansible.builtin.command:
+        cmd: gh --version
+      register: gh_version
+      changed_when: false
+      failed_when: gh_version.rc != 0
+
+    - name: Check gh CLI is authenticated
+      ansible.builtin.command:
+        cmd: gh auth status
+      register: gh_auth
+      changed_when: false
+      failed_when: gh_auth.rc != 0
+
+    - name: Check oc CLI is available
+      ansible.builtin.command:
+        cmd: oc whoami
+      register: oc_whoami
+      changed_when: false
+      failed_when: oc_whoami.rc != 0
+
+    # ==================== Get Webhook Configuration ====================
+    - name: Get webhook route URL
+      ansible.builtin.command:
+        cmd: oc get route github-webhook -n {{ ci_pipelines_namespace }} -o jsonpath='{.spec.host}'
+      register: webhook_route
+      changed_when: false
+
+    - name: Set webhook URL fact
+      ansible.builtin.set_fact:
+        webhook_url: "https://{{ webhook_route.stdout }}/"
+
+    - name: Get webhook secret from AWS Secrets Manager
+      ansible.builtin.command:
+        cmd: >
+          aws secretsmanager get-secret-value
+          --secret-id {{ secrets_prefix }}/ci-pipelines
+          --query SecretString
+          --output text
+          --region {{ aws_region }}
+      register: ci_secrets_result
+      changed_when: false
+      no_log: true
+
+    - name: Parse webhook secret
+      ansible.builtin.set_fact:
+        webhook_secret: "{{ (ci_secrets_result.stdout | from_json)['github-webhook-secret'] }}"
+      no_log: true
+
+    - name: Display webhook configuration
+      ansible.builtin.debug:
+        msg: |
+          Webhook URL: {{ webhook_url }}
+          Target repositories: {{ repos | join(', ') }}
+          Events: {{ webhook_events | join(', ') }}
+
+    # ==================== Configure Webhooks ====================
+    - name: Check if repository exists
+      ansible.builtin.command:
+        cmd: gh repo view {{ github_org }}/{{ item }}
+      register: repo_check
+      failed_when: false
+      changed_when: false
+      loop: "{{ repos }}"
+
+    - name: Create list of existing repos
+      ansible.builtin.set_fact:
+        existing_repos: "{{ repo_check.results | selectattr('rc', 'eq', 0) | map(attribute='item') | list }}"
+
+    - name: Warn about missing repositories
+      ansible.builtin.debug:
+        msg: "WARNING: Repository {{ item.item }} does not exist or is not accessible"
+      loop: "{{ repo_check.results }}"
+      when: item.rc != 0
+
+    - name: List existing webhooks for each repo
+      ansible.builtin.command:
+        cmd: gh api repos/{{ github_org }}/{{ item }}/hooks --jq '.[].config.url'
+      register: existing_webhooks
+      loop: "{{ existing_repos }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Delete existing webhook if URL matches
+      ansible.builtin.shell:
+        cmd: |
+          HOOK_ID=$(gh api repos/{{ github_org }}/{{ item.item }}/hooks --jq '.[] | select(.config.url == "{{ webhook_url }}") | .id')
+          if [ -n "$HOOK_ID" ]; then
+            gh api -X DELETE repos/{{ github_org }}/{{ item.item }}/hooks/$HOOK_ID
+            echo "Deleted existing webhook $HOOK_ID"
+          fi
+      loop: "{{ existing_webhooks.results }}"
+      when: webhook_url in (item.stdout | default(''))
+      register: delete_result
+      changed_when: "'Deleted' in (delete_result.stdout | default(''))"
+
+    - name: Create webhook for each repository
+      ansible.builtin.command:
+        cmd: >
+          gh api repos/{{ github_org }}/{{ item }}/hooks
+          --method POST
+          --field name=web
+          --field active=true
+          --field events='{{ webhook_events | to_json }}'
+          --field config[url]='{{ webhook_url }}'
+          --field config[content_type]=json
+          --field config[secret]='{{ webhook_secret }}'
+          --field config[insecure_ssl]=0
+      loop: "{{ existing_repos }}"
+      register: webhook_create
+      no_log: true
+
+    # ==================== Verify Webhooks ====================
+    - name: Verify webhooks were created
+      ansible.builtin.command:
+        cmd: gh api repos/{{ github_org }}/{{ item }}/hooks --jq '.[].config.url'
+      register: verify_webhooks
+      loop: "{{ existing_repos }}"
+      changed_when: false
+
+    - name: Display webhook status
+      ansible.builtin.debug:
+        msg: |
+          
+          ============================================================
+          GitHub Webhooks Configuration Complete
+          ============================================================
+          
+          Webhook URL: {{ webhook_url }}
+          
+          Configured repositories:
+          {% for repo in existing_repos %}
+            - {{ github_org }}/{{ repo }}
+          {% endfor %}
+          
+          Events: {{ webhook_events | join(', ') }}
+          Content-Type: application/json
+          
+          To verify webhooks, visit:
+          {% for repo in existing_repos %}
+            https://github.com/{{ github_org }}/{{ repo }}/settings/hooks
+          {% endfor %}
+          
+          ============================================================

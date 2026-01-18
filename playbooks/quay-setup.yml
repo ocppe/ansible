@@ -1,0 +1,199 @@
+---
+# Playbook: quay-setup.yml
+# Sets up Quay.io organization and robot account for CI pipelines
+#
+# Prerequisites:
+#   - Quay.io account with OAuth application token
+#   - Set QUAY_TOKEN environment variable with API token
+#
+# To create a Quay.io API token:
+#   1. Log in to quay.io
+#   2. Go to Account Settings -> Applications
+#   3. Create a new OAuth Application
+#   4. Generate a token with these permissions:
+#      - Administer Organization
+#      - Create Repositories
+#      - Administer Repositories
+#
+# Usage:
+#   export QUAY_TOKEN=your_oauth_token
+#   ansible-playbook playbooks/quay-setup.yml -e quay_org=ocppe
+
+- name: Setup Quay.io Organization and Robot Account
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    quay_api_url: "https://quay.io/api/v1"
+    quay_org: "ocppe"
+    quay_robot_name: "cicd"
+    quay_robot_description: "Robot account for CI/CD pipelines"
+    quay_token: "{{ lookup('env', 'QUAY_TOKEN') }}"
+    repositories:
+      - customer-api
+      - product-api
+      - order-api
+
+  tasks:
+    # ==================== Validate Prerequisites ====================
+    - name: Validate QUAY_TOKEN is set
+      ansible.builtin.assert:
+        that:
+          - quay_token | length > 0
+        fail_msg: "QUAY_TOKEN environment variable must be set. See playbook comments for instructions."
+
+    # ==================== Check/Create Organization ====================
+    - name: Check if organization exists
+      ansible.builtin.uri:
+        url: "{{ quay_api_url }}/organization/{{ quay_org }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ quay_token }}"
+        status_code: [200, 404]
+      register: org_check
+
+    - name: Organization status
+      ansible.builtin.debug:
+        msg: "{{ 'Organization exists' if org_check.status == 200 else 'Organization does not exist - will attempt to create' }}"
+
+    - name: Create organization if it does not exist
+      ansible.builtin.uri:
+        url: "{{ quay_api_url }}/organization/"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ quay_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "{{ quay_org }}"
+        status_code: [201, 400]
+      register: org_create
+      when: org_check.status == 404
+
+    # ==================== Create Robot Account ====================
+    - name: Check if robot account exists
+      ansible.builtin.uri:
+        url: "{{ quay_api_url }}/organization/{{ quay_org }}/robots/{{ quay_robot_name }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ quay_token }}"
+        status_code: [200, 400, 404]
+      register: robot_check
+
+    - name: Create robot account
+      ansible.builtin.uri:
+        url: "{{ quay_api_url }}/organization/{{ quay_org }}/robots/{{ quay_robot_name }}"
+        method: PUT
+        headers:
+          Authorization: "Bearer {{ quay_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          description: "{{ quay_robot_description }}"
+        status_code: [200, 201]
+      register: robot_create
+      when: robot_check.status != 200
+
+    - name: Get robot account credentials
+      ansible.builtin.uri:
+        url: "{{ quay_api_url }}/organization/{{ quay_org }}/robots/{{ quay_robot_name }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ quay_token }}"
+        status_code: [200]
+      register: robot_info
+
+    - name: Set robot credentials facts
+      ansible.builtin.set_fact:
+        robot_username: "{{ quay_org }}+{{ quay_robot_name }}"
+        robot_token: "{{ robot_info.json.token }}"
+      no_log: true
+
+    # ==================== Create Repositories ====================
+    - name: Check if repositories exist
+      ansible.builtin.uri:
+        url: "{{ quay_api_url }}/repository/{{ quay_org }}/{{ item }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ quay_token }}"
+        status_code: [200, 404]
+      register: repo_check
+      loop: "{{ repositories }}"
+
+    - name: Create repositories that don't exist
+      ansible.builtin.uri:
+        url: "{{ quay_api_url }}/repository"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ quay_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          repository: "{{ item.item }}"
+          namespace: "{{ quay_org }}"
+          visibility: "public"
+          description: "{{ item.item }} container image"
+        status_code: [201]
+      loop: "{{ repo_check.results }}"
+      when: item.status == 404
+      loop_control:
+        label: "{{ item.item }}"
+
+    # ==================== Grant Robot Write Access ====================
+    - name: Grant robot account write permission to repositories
+      ansible.builtin.uri:
+        url: "{{ quay_api_url }}/repository/{{ quay_org }}/{{ item }}/permissions/user/{{ quay_org }}+{{ quay_robot_name }}"
+        method: PUT
+        headers:
+          Authorization: "Bearer {{ quay_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          role: "write"
+        status_code: [200]
+      loop: "{{ repositories }}"
+
+    # ==================== Output Summary ====================
+    - name: Display setup summary
+      ansible.builtin.debug:
+        msg: |
+          
+          ============================================================
+          Quay.io Setup Complete
+          ============================================================
+          
+          Organization: {{ quay_org }}
+          Robot Account: {{ robot_username }}
+          
+          Repositories created:
+          {% for repo in repositories %}
+            - quay.io/{{ quay_org }}/{{ repo }}
+          {% endfor %}
+          
+          Robot credentials (save these for AWS Secrets Manager):
+            Username: {{ robot_username }}
+            Token: {{ robot_token }}
+          
+          ============================================================
+      no_log: false
+
+    - name: Save robot credentials to file
+      ansible.builtin.copy:
+        content: |
+          # Quay.io Robot Credentials - DO NOT COMMIT THIS FILE
+          QUAY_USERNAME={{ robot_username }}
+          QUAY_PASSWORD={{ robot_token }}
+        dest: "{{ playbook_dir }}/../.quay-credentials.env"
+        mode: '0600'
+      no_log: true
+
+    - name: Remind about credentials file
+      ansible.builtin.debug:
+        msg: |
+          Robot credentials saved to ansible/.quay-credentials.env
+          
+          Use these values when running aws-secrets-setup.yml:
+            ansible-playbook playbooks/aws-secrets-setup.yml \
+              -e quay_username='{{ robot_username }}' \
+              -e quay_password='<token from .quay-credentials.env>'

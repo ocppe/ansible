@@ -1,2 +1,7 @@
 .clusters
 .venv
+
+# Generated secrets - DO NOT COMMIT
+.secrets.env
+.quay-credentials.env
+*.env

@@ -1,0 +1,117 @@
+---
+# Playbook: github-repos-setup.yml
+# Creates GitHub repositories for the project using gh CLI
+#
+# Prerequisites:
+#   - gh CLI installed and authenticated (gh auth login)
+#   - User must have permissions to create repos in the organization
+#
+# Usage:
+#   ansible-playbook playbooks/github-repos-setup.yml -e github_org=ocppe
+
+- name: Setup GitHub Repositories
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    github_org: "ocppe"
+    repositories:
+      - name: customer-api
+        description: "Quarkus REST API for customer management"
+        visibility: public
+      - name: product-api
+        description: "Quarkus REST API for product catalog"
+        visibility: public
+      - name: order-api
+        description: "Quarkus REST API for order management"
+        visibility: public
+      - name: gitops-hub
+        description: "GitOps configuration for hub cluster"
+        visibility: public
+
+  tasks:
+    # ==================== Verify Prerequisites ====================
+    - name: Check gh CLI is installed
+      ansible.builtin.command:
+        cmd: gh --version
+      register: gh_version
+      changed_when: false
+      failed_when: gh_version.rc != 0
+
+    - name: Check gh CLI is authenticated
+      ansible.builtin.command:
+        cmd: gh auth status
+      register: gh_auth
+      changed_when: false
+      failed_when: gh_auth.rc != 0
+
+    # ==================== Check Organization ====================
+    - name: Check if organization exists
+      ansible.builtin.command:
+        cmd: gh api orgs/{{ github_org }}
+      register: org_check
+      failed_when: false
+      changed_when: false
+
+    - name: Use user account if org doesn't exist
+      ansible.builtin.set_fact:
+        repo_owner: "{{ github_org }}"
+        is_org: "{{ org_check.rc == 0 }}"
+
+    - name: Display repo owner info
+      ansible.builtin.debug:
+        msg: "{{ 'Using organization' if is_org else 'Using user account' }}: {{ repo_owner }}"
+
+    # ==================== Create Repositories ====================
+    - name: Check if repositories exist
+      ansible.builtin.command:
+        cmd: gh repo view {{ repo_owner }}/{{ item.name }}
+      register: repo_check
+      failed_when: false
+      changed_when: false
+      loop: "{{ repositories }}"
+
+    - name: Create repositories that don't exist
+      ansible.builtin.command:
+        cmd: >
+          gh repo create {{ repo_owner }}/{{ item.item.name }}
+          --{{ item.item.visibility }}
+          --description "{{ item.item.description }}"
+          {% if is_org %}--clone=false{% endif %}
+      loop: "{{ repo_check.results }}"
+      when: item.rc != 0
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # ==================== Configure Repository Settings ====================
+    - name: Enable issues on repositories
+      ansible.builtin.command:
+        cmd: >
+          gh api repos/{{ repo_owner }}/{{ item.name }}
+          --method PATCH
+          --field has_issues=true
+          --field has_wiki=false
+          --field has_projects=false
+      loop: "{{ repositories }}"
+      changed_when: false
+
+    # ==================== Display Summary ====================
+    - name: Display repository URLs
+      ansible.builtin.debug:
+        msg: |
+          
+          ============================================================
+          GitHub Repositories Setup Complete
+          ============================================================
+          
+          Repositories:
+          {% for repo in repositories %}
+            - https://github.com/{{ repo_owner }}/{{ repo.name }}
+          {% endfor %}
+          
+          Next steps:
+            1. Push code to the repositories
+            2. Run github-webhooks-setup.yml to configure CI webhooks
+          
+          ============================================================
