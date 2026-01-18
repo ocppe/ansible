@@ -1,6 +1,47 @@
-# OpenShift Platform Engineering Demo - Ansible Automation
+# OpenShift Platform Engineering Demo (OCPPE)
 
-Ansible playbooks for setting up the OpenShift Platform Engineering demo infrastructure, including AWS resources, GitHub configuration, and Quay.io container registry.
+A complete platform engineering demo for Red Hat OpenShift featuring multi-cluster management, security, CI/CD pipelines, and a developer portal.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                            Hub Cluster                               │
+│         hub.ocp.sandbox${SANDBOX_ID}.opentlc.com                    │
+│                                                                      │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌─────────────┐ │
+│  │     ACM      │ │     ACS      │ │   Pipelines  │ │  Dev Hub    │ │
+│  │  (Cluster    │ │  (Security   │ │   (Tekton    │ │ (Backstage  │ │
+│  │   Mgmt)      │ │   Scanner)   │ │    CI/CD)    │ │   Portal)   │ │
+│  └──────────────┘ └──────────────┘ └──────────────┘ └─────────────┘ │
+│                                                                      │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │                     CI Pipelines (Tekton)                      │  │
+│  │  GitHub Webhook → Detect Type → Build → Test → Push to Quay   │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│  Secrets synced from AWS Secrets Manager via External Secrets       │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+              ACM manages clusters
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        ▼                     ▼                     ▼
+┌───────────────┐     ┌───────────────┐     ┌───────────────┐
+│  Dev Cluster  │     │ Test Cluster  │     │ Prod Cluster  │
+│    (SNO)      │     │    (SNO)      │     │    (SNO)      │
+└───────────────┘     └───────────────┘     └───────────────┘
+```
+
+## Project Structure
+
+| Directory     | Description                                        |
+| ------------- | -------------------------------------------------- |
+| ansible/      | Infrastructure automation (this directory)         |
+| gitops-hub/   | Hub cluster GitOps configuration                   |
+| customer-api/ | Quarkus REST API for customer management           |
+| product-api/  | Quarkus REST API for product catalog               |
+| order-api/    | Quarkus REST API for order management              |
 
 ## Prerequisites
 
@@ -330,27 +371,63 @@ aws secretsmanager get-secret-value --secret-id ocppe/ci-pipelines --query Secre
 oc describe externalsecret quay-credentials -n ci-pipelines
 ```
 
-## Platform Overview
+## APIs
+
+### Customer API
+- **Endpoint**: `/api/v1/customers`
+- **Operations**: CRUD for customer records
+- **Fields**: customerId, firstName, lastName, email, phone
+
+### Product API
+- **Endpoint**: `/api/v1/products`
+- **Operations**: CRUD for product catalog
+- **Fields**: itemId, name, description, priceUsd
+
+### Order API
+- **Endpoint**: `/api/v1/orders`
+- **Operations**: CRUD for orders with line items
+- **Fields**: orderId, customerId, status, items[], totalAmount
+
+## CI/CD Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Hub Cluster                              │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌────────────┐ │
-│  │ ACM         │ │ ACS         │ │ Pipelines   │ │ Dev Hub    │ │
-│  │ (Multi-     │ │ (Security)  │ │ (CI/CD)     │ │ (Portal)   │ │
-│  │  Cluster)   │ │             │ │             │ │            │ │
-│  └─────────────┘ └─────────────┘ └─────────────┘ └────────────┘ │
-│                                                                  │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │                    CI Pipelines                             │ │
-│  │  GitHub Webhook → Build → Test → Push to quay.io/ocppe     │ │
-│  └────────────────────────────────────────────────────────────┘ │
-│                                                                  │
-│  Secrets synced from AWS Secrets Manager via External Secrets   │
-└─────────────────────────────────────────────────────────────────┘
-         │ ACM manages
+GitHub Push/PR
+      │
+      ▼
+┌─────────────────┐
+│ Webhook Trigger │
+└────────┬────────┘
+         │
          ▼
-┌────────────────┐  ┌────────────────┐  ┌────────────────┐
-│  Dev Cluster   │  │  Test Cluster  │  │  Prod Cluster  │
-└────────────────┘  └────────────────┘  └────────────────┘
+┌─────────────────┐
+│  CI Pipeline    │
+│  ├─ git-clone   │
+│  ├─ detect-type │
+│  ├─ test        │
+│  ├─ build       │
+│  └─ push-image  │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│   quay.io/ocppe │
+│   /<app-name>   │
+└─────────────────┘
+```
+
+## Access Points
+
+After deployment, access the platform services:
+
+| Service       | Command                                                          |
+| ------------- | ---------------------------------------------------------------- |
+| ArgoCD        | `oc get route openshift-gitops-server -n openshift-gitops`       |
+| ACM Console   | `oc get route multicloud-console -n open-cluster-management`     |
+| ACS Central   | `oc get route central -n stackrox`                               |
+| Developer Hub | `oc get route backstage-developer-hub -n rhdh`                   |
+| CI Webhook    | `oc get route github-webhook -n ci-pipelines`                    |
+
+To get ArgoCD admin password:
+```shell
+oc extract secret/openshift-gitops-cluster -n openshift-gitops --to=-
 ```
