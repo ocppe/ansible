@@ -114,7 +114,7 @@ ansible/
 ├── inventory/
 │   └── localhost.yml
 ├── playbooks/
-│   ├── route53-setup.yml    # Route53 subdomain setup
+│   ├── route53-setup.yml     # Route53 subdomain setup
 │   └── openshift-install.yml # OpenShift cluster installation
 └── templates/
     └── install-config.yaml.j2
