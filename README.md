@@ -130,11 +130,63 @@ ansible/
 After installation, cluster artifacts are stored in:
 
 ```
-clusters/
+.clusters/
 └── <cluster_name>/
     ├── auth/
     │   ├── kubeconfig
     │   └── kubeadmin-password
     ├── metadata.json
     └── install-config.yaml.backup
+```
+
+## Post-Installation
+
+After the hub cluster is installed, bootstrap the GitOps configuration:
+
+```shell
+# Set kubeconfig
+export KUBECONFIG=$(pwd)/.clusters/hub/auth/kubeconfig
+
+# Bootstrap OpenShift GitOps (see gitops-hub repository)
+cd ../gitops-hub
+oc apply -k bootstrap/
+```
+
+See the `gitops-hub` repository README for complete instructions on deploying:
+
+- Advanced Cluster Management
+- Advanced Cluster Security
+- OpenShift Pipelines
+- Red Hat Developer Hub
+- CI Pipelines
+
+## Platform Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Hub Cluster                              │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌────────────┐ │
+│  │ ACM         │ │ ACS         │ │ Pipelines   │ │ Dev Hub    │ │
+│  │ (Multi-     │ │ (Security)  │ │ (CI/CD)     │ │ (Portal)   │ │
+│  │  Cluster)   │ │             │ │             │ │            │ │
+│  └─────────────┘ └─────────────┘ └─────────────┘ └────────────┘ │
+│                            │                                     │
+│                    GitHub Webhooks                               │
+│                            │                                     │
+│  ┌─────────────────────────┴─────────────────────────────────┐  │
+│  │                    CI Pipelines                            │  │
+│  │  customer-api → build → test → quay.io/ocppe/customer-api │  │
+│  │  product-api  → build → test → quay.io/ocppe/product-api  │  │
+│  │  order-api    → build → test → quay.io/ocppe/order-api    │  │
+│  └────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+         │ ACM manages
+         ▼
+┌────────────────┐  ┌────────────────┐  ┌────────────────┐
+│  Dev Cluster   │  │  Test Cluster  │  │  Prod Cluster  │
+│                │  │                │  │                │
+│ - customer-api │  │ - customer-api │  │ - customer-api │
+│ - product-api  │  │ - product-api  │  │ - product-api  │
+│ - order-api    │  │ - order-api    │  │ - order-api    │
+└────────────────┘  └────────────────┘  └────────────────┘
 ```
