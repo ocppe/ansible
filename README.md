@@ -152,8 +152,48 @@ cd ../gitops-hub
 oc apply -k bootstrap/
 ```
 
+### Create AWS Secrets Manager Secrets
+
+All platform secrets are managed via External Secrets Operator syncing from AWS Secrets Manager. Create these secrets before deploying the app-of-apps:
+
+```shell
+# Developer Hub secrets
+BACKEND_SECRET=$(openssl rand -base64 32)
+OAUTH_SECRET=$(openssl rand -base64 32)
+aws secretsmanager create-secret \
+  --name ocppe/developer-hub \
+  --secret-string "{
+    \"backend-secret\": \"${BACKEND_SECRET}\",
+    \"oauth-client-secret\": \"${OAUTH_SECRET}\"
+  }"
+
+# CI Pipeline secrets
+WEBHOOK_SECRET=$(openssl rand -hex 20)
+aws secretsmanager create-secret \
+  --name ocppe/ci-pipelines \
+  --secret-string "{
+    \"github-webhook-secret\": \"${WEBHOOK_SECRET}\",
+    \"quay-username\": \"YOUR_QUAY_USERNAME\",
+    \"quay-password\": \"YOUR_QUAY_ROBOT_TOKEN\",
+    \"git-username\": \"YOUR_GITHUB_USERNAME\",
+    \"git-password\": \"YOUR_GITHUB_PAT\"
+  }"
+
+# Save the webhook secret for GitHub webhook configuration
+echo "GitHub Webhook Secret: ${WEBHOOK_SECRET}"
+```
+
+### Deploy the App-of-Apps
+
+```shell
+# Update repoURL in argocd-apps/*.yaml to your Git repository
+# Then deploy the root application
+oc apply -f argocd-apps/root-application.yaml
+```
+
 See the `gitops-hub` repository README for complete instructions on deploying:
 
+- External Secrets Operator (syncs secrets from AWS Secrets Manager)
 - Advanced Cluster Management
 - Advanced Cluster Security
 - OpenShift Pipelines
