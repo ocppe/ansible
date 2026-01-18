@@ -3,7 +3,7 @@
 sandbox_id: "{{ lookup('env', 'SANDBOX_ID') }}"
 
 # Base domain configuration
-base_domain: "ocp.sandbox{{ sandbox_id }}.opentlc.com"
+base_domain: "sandbox{{ sandbox_id }}.opentlc.com"
 
 # AWS Configuration
 aws_region: us-east-2
@@ -19,7 +19,7 @@ clusters:
     sizing: sno
     control_plane:
       count: 1
-      instance_type: m6i.4xlarge
+      instance_type: c7i.24xlarge
     worker:
       count: 0
       instance_type: m6i.2xlarge

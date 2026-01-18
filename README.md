@@ -14,17 +14,24 @@ Ansible playbooks for setting up the OpenShift Platform Engineering demo infrast
 
 ## Installation
 
-Install required Ansible collections:
+Create and activate the virtual environment:
 
 ```shell
 cd ansible
-ansible-galaxy collection install -r requirements.yml
+python3 -m venv .venv
+source .venv/bin/activate
 ```
 
 Install Python dependencies:
 
 ```shell
-pip install boto3 botocore
+pip install -r requirements.txt
+```
+
+Install required Ansible collections:
+
+```shell
+ansible-galaxy collection install -r requirements.yml
 ```
 
 ## AWS Authentication
